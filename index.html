@@ -968,9 +968,6 @@
         all[dateKey] = data;
         await saveData(all);
         
-        // 同步到 Supabase
-        syncToSupabase(dateKey, data, showUserFeedback);
-        
         console.log('[saveDateData] Data saved for:', dateKey);
       } catch (error) {
         console.error('[saveDateData] Error:', error);
@@ -1561,11 +1558,10 @@
             break;
         }
         
-        // 保存数据到 localStorage Save data to localStorage
-        saveDateData(AppState.selectedDateKey, log);
+        // 保存数据到 localStorage 并同步到云端 Save data to localStorage and sync to cloud
+        await saveDateData(AppState.selectedDateKey, log, true);
         
-        // 从 Supabase 删除记录
-        deleteFromSupabase(id, type, AppState.selectedDateKey);
+        console.log('[Supabase] Deletion synced to cloud');
         
         // 刷新所有视图 Refresh all views
         await renderDisplay();
