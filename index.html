@@ -1210,7 +1210,7 @@
     }
 
     // ==================== 渲染函数 ====================
-    function renderCalendar() {
+    async function renderCalendar() {
       try {
         const year = AppState.currentDate.getFullYear();
         const month = AppState.currentDate.getMonth();
@@ -1258,8 +1258,10 @@
             dayEl.classList.add('active');
           }
           
-          const log = loadData()[dateKey];
+          // 使用增强的数据加载，优先从 Supabase 获取数据
+          const log = await getDateDataEnhanced(dateKey);
           if (log) {
+            // 检查 JSONB 数组长度来绘制圆点
             if (log.foods && log.foods.length > 0) {
               const foodDot = document.createElement('div');
               foodDot.className = 'food-dot';
@@ -1289,7 +1291,7 @@
           
           dayEl.addEventListener('click', async () => {
             AppState.selectedDateKey = dateKey;
-            renderCalendar();
+            await renderCalendar();
             await renderDisplay();
           });
           
@@ -1470,7 +1472,7 @@
         
         // 刷新所有视图 Refresh all views
         await renderDisplay();
-        renderCalendar();
+        await renderCalendar();
         
         console.log('[deleteItem] Item deleted successfully');
         
@@ -1846,7 +1848,7 @@
               }
               
               // 刷新显示
-              renderCalendar();
+              await renderCalendar();
               await renderDisplay();
               
             } else {
@@ -2135,16 +2137,16 @@
         }
         
         // 渲染界面
-        renderCalendar();
-        renderDisplay();
+        await renderCalendar();
+        await renderDisplay();
         switchTab('food');
         
         console.log('[loadAndRenderData] Data loaded and rendered');
       } catch (error) {
         console.error('[loadAndRenderData] Error:', error);
         // 回退到基本渲染
-        renderCalendar();
-        renderDisplay();
+        await renderCalendar();
+        await renderDisplay();
         switchTab('food');
       }
     }
@@ -2176,7 +2178,7 @@
             
             input.value = '';
             await renderDisplay();
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
@@ -2194,7 +2196,7 @@
             
             input.value = '';
             await renderDisplay();
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
@@ -2215,7 +2217,7 @@
             document.getElementById('sleepTimeInput').value = '';
             document.getElementById('wakeTimeInput').value = '';
             await renderDisplay();
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
@@ -2234,7 +2236,7 @@
             
             document.getElementById('skinConditionInput').value = '';
             await renderDisplay();
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
@@ -2253,7 +2255,7 @@
             
             document.getElementById('diaryInput').value = '';
             await renderDisplay();
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
@@ -2261,15 +2263,15 @@
         const calPrev = document.getElementById('calPrev');
         const calNext = document.getElementById('calNext');
         if (calPrev) {
-          calPrev.addEventListener('click', () => {
+          calPrev.addEventListener('click', async () => {
             AppState.currentDate.setMonth(AppState.currentDate.getMonth() - 1);
-            renderCalendar();
+            await renderCalendar();
           });
         }
         if (calNext) {
-          calNext.addEventListener('click', () => {
+          calNext.addEventListener('click', async () => {
             AppState.currentDate.setMonth(AppState.currentDate.getMonth() + 1);
-            renderCalendar();
+            await renderCalendar();
           });
         }
         
