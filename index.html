@@ -248,6 +248,7 @@
           <button id="exportDataBtn" class="btn">📤 导出JSON</button>
           <button id="exportTableBtn" class="btn">📊 导出表格</button>
           <button id="importDataBtn" class="btn">📥 导入数据</button>
+          <button id="syncToCloudBtn" class="btn">☁️ 同步至云端</button>
           <input type="file" id="importFileInput" accept=".json" style="display: none;">
         </div>
       </div>
@@ -483,7 +484,7 @@
       try {
         // 保存到 localStorage
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        console.log('[saveData] Data saved to localStorage successfully');
+        console.log('[Supabase] Data saved to localStorage successfully');
         
         // 同步到 Supabase
         if (supabaseClient) {
@@ -925,6 +926,148 @@
       }
     }
 
+    // 强制同步所有本地数据到云端
+    async function forceSyncToCloud() {
+      if (!supabaseClient) {
+        console.log('[Supabase] Client not initialized, cannot sync');
+        return { success: false, message: 'Supabase 未初始化' };
+      }
+
+      try {
+        console.log('[Supabase] Starting forced sync to cloud...');
+        
+        // 获取所有本地数据
+        const localData = loadData();
+        const dateKeys = Object.keys(localData);
+        
+        if (dateKeys.length === 0) {
+          console.log('[Supabase] No local data to sync');
+          return { success: true, message: '没有本地数据需要同步' };
+        }
+
+        let totalRecords = 0;
+        let successCount = 0;
+        let failCount = 0;
+
+        // 遍历所有日期数据
+        for (const dateKey of dateKeys) {
+          const dayData = localData[dateKey];
+          
+          // 转换为 Supabase 格式
+          const supabaseRecords = [];
+          
+          // 处理饮食记录
+          if (dayData.foods && dayData.foods.length > 0) {
+            dayData.foods.forEach(food => {
+              supabaseRecords.push({
+                date_key: dateKey,
+                category: 'food',
+                content: food.content || food.name || '',
+                created_at: new Date().toISOString()
+              });
+            });
+          }
+          
+          // 处理运动记录
+          if (dayData.exercises && dayData.exercises.length > 0) {
+            dayData.exercises.forEach(exercise => {
+              supabaseRecords.push({
+                date_key: dateKey,
+                category: 'exercise',
+                content: exercise.content || exercise.name || '',
+                created_at: new Date().toISOString()
+              });
+            });
+          }
+          
+          // 处理睡眠记录
+          if (dayData.sleeps && dayData.sleeps.length > 0) {
+            dayData.sleeps.forEach(sleep => {
+              supabaseRecords.push({
+                date_key: dateKey,
+                category: 'sleep',
+                content: sleep.content || `睡眠时间: ${sleep.sleepTime || ''} - ${sleep.wakeTime || ''}`,
+                created_at: new Date().toISOString()
+              });
+            });
+          }
+          
+          // 处理皮肤记录
+          if (dayData.skins && dayData.skins.length > 0) {
+            dayData.skins.forEach(skin => {
+              supabaseRecords.push({
+                date_key: dateKey,
+                category: 'skin',
+                content: skin.content || skin.description || '',
+                created_at: new Date().toISOString()
+              });
+            });
+          }
+          
+          // 处理日记记录
+          if (dayData.diaries && dayData.diaries.length > 0) {
+            dayData.diaries.forEach(diary => {
+              supabaseRecords.push({
+                date_key: dateKey,
+                category: 'diary',
+                content: diary.content || diary.text || '',
+                created_at: new Date().toISOString()
+              });
+            });
+          }
+
+          totalRecords += supabaseRecords.length;
+
+          if (supabaseRecords.length > 0) {
+            console.log(`[Supabase] Syncing ${supabaseRecords.length} records for ${dateKey}`);
+            
+            // 尝试批量同步
+            const { error: batchError } = await supabaseClient
+              .from('evolution_logs')
+              .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
+
+            if (batchError) {
+              console.error(`[Supabase] Batch sync failed for ${dateKey}, trying individual records:`, batchError);
+              
+              // 批量失败，单条重试
+              for (const record of supabaseRecords) {
+                try {
+                  const { error: singleError } = await supabaseClient
+                    .from('evolution_logs')
+                    .upsert(record, { onConflict: 'date_key, category, content' });
+                  
+                  if (singleError) {
+                    console.error(`[Supabase] Failed to sync record for ${dateKey}:`, singleError);
+                    failCount++;
+                  } else {
+                    successCount++;
+                  }
+                } catch (retryError) {
+                  console.error(`[Supabase] Retry error for ${dateKey}:`, retryError);
+                  failCount++;
+                }
+              }
+            } else {
+              console.log(`[Supabase] Successfully synced ${dateKey}`);
+              successCount += supabaseRecords.length;
+            }
+          }
+        }
+        
+        console.log(`[Supabase] Forced sync completed: ${successCount} success, ${failCount} failed, ${totalRecords} total`);
+        
+        if (failCount === 0) {
+          return { success: true, message: `云端同步成功，共同步 ${successCount} 条记录` };
+        } else {
+          return { success: false, message: `同步失败，${successCount} 条成功，${failCount} 条失败` };
+        }
+        
+      } catch (error) {
+        console.error('[Supabase] Forced sync error:', error);
+        return { success: false, message: '同步失败，请检查网络' };
+      }
+    }
+
     function getDateData(dateKey) {
       try {
         const all = loadData();
@@ -968,9 +1111,9 @@
         all[dateKey] = data;
         await saveData(all);
         
-        console.log('[saveDateData] Data saved for:', dateKey);
+        console.log('[Supabase] Data saved for:', dateKey);
       } catch (error) {
-        console.error('[saveDateData] Error:', error);
+        console.error('[Supabase] saveDateData Error:', error);
       }
     }
 
@@ -1926,31 +2069,18 @@
               
               // 立即同步所有数据到云端
               if (supabaseClient) {
-                console.log('[Import] Starting immediate cloud sync...');
-                let syncSuccess = 0;
-                let syncFailed = 0;
+                console.log('[Supabase] Starting immediate cloud sync after import...');
                 
-                for (const dateKey of Object.keys(importedData)) {
-                  try {
-                    await syncToSupabase(dateKey, importedData[dateKey]);
-                    syncSuccess++;
-                  } catch (error) {
-                    console.error(`[Import] Failed to sync ${dateKey}:`, error);
-                    syncFailed++;
-                  }
-                }
-                
-                console.log(`[Import] Cloud sync completed: ${syncSuccess} success, ${syncFailed} failed`);
+                const syncResult = await forceSyncToCloud();
+                console.log(`[Supabase] Import sync completed: ${syncResult.message}`);
                 
                 // 显示导入结果
-                const message = syncFailed > 0 
-                  ? `数据导入成功！已导入 ${Object.keys(importedData).length} 天的数据。\n云端同步：${syncSuccess} 天成功，${syncFailed} 天失败`
-                  : `数据导入成功！已导入 ${Object.keys(importedData).length} 天的数据，并全部同步至云端`;
-                
+                const message = syncResult.success 
+                  ? `导入成功！${syncResult.message}` 
+                  : `导入完成，但${syncResult.message}`;
                 alert(message);
               } else {
-                console.log('[Import] Supabase not available, data saved locally only');
-                alert('数据导入成功！已导入 ' + Object.keys(importedData).length + ' 天的数据（仅本地存储）');
+                alert('导入成功！但 Supabase 未初始化，数据仅保存在本地');
               }
               
               // 刷新显示
@@ -2393,6 +2523,27 @@
         if (importDataBtn) importDataBtn.addEventListener('click', importData);
         if (importFileInput) importFileInput.addEventListener('change', handleImportFile);
         if (copyAllBtn) copyAllBtn.addEventListener('click', copyAllData);
+        
+        // 同步至云端按钮
+        const syncToCloudBtn = document.getElementById('syncToCloudBtn');
+        if (syncToCloudBtn) {
+          syncToCloudBtn.addEventListener('click', async () => {
+            const originalText = syncToCloudBtn.textContent;
+            syncToCloudBtn.textContent = '同步中...';
+            syncToCloudBtn.disabled = true;
+            
+            try {
+              const result = await forceSyncToCloud();
+              alert(result.message);
+            } catch (error) {
+              console.error('[Supabase] Sync button error:', error);
+              alert('同步失败，请检查网络');
+            } finally {
+              syncToCloudBtn.textContent = originalText;
+              syncToCloudBtn.disabled = false;
+            }
+          });
+        }
         
         console.log('[DOMContentLoaded] Event listeners setup complete');
         
