@@ -17,6 +17,10 @@
   <meta name="application-name" content="Personal Evolution Lab">
   
   <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Supabase CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -191,6 +195,44 @@
         gap: 15px;
       }
     }
+
+    /* 环境提醒样式 */
+    .env-warning {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+      color: white;
+      padding: 8px 16px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 9999;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-bottom: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .env-warning .close-btn {
+      float: right;
+      background: none;
+      border: none;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      margin-left: 10px;
+      opacity: 0.8;
+      transition: opacity 0.2s;
+    }
+
+    .env-warning .close-btn:hover {
+      opacity: 1;
+    }
+
+    /* 为环境提醒调整主容器顶部间距 */
+    .has-env-warning {
+      margin-top: 40px;
+    }
   </style>
 </head>
 <body>
@@ -353,6 +395,62 @@
     // ==================== 常量定义 ====================
     const STORAGE_KEY = 'personal_evolution_lab_all_in_one';
 
+    // ==================== Supabase 配置 ====================
+    const supabaseUrl = 'https://jlxzcrtynbslbnseqisc.supabase.co';
+    const supabaseKey = 'sb_publishable_DOybXnMauGHRzO_bJaoZUg_1HO0-aVD';
+    let supabaseClient;
+
+    // 初始化 Supabase 客户端
+    function initSupabase() {
+      try {
+        console.log('[Supabase] Starting initialization...');
+        console.log('[Supabase] URL:', supabaseUrl);
+        console.log('[Supabase] Key length:', supabaseKey ? supabaseKey.length : 0);
+        
+        if (typeof window.supabase !== 'undefined') {
+          supabaseClient = window.supabase.createClient(supabaseUrl, supabaseKey);
+          
+          // 测试连接
+          testSupabaseConnection();
+          
+          console.log('[Supabase] Client initialized successfully');
+          return true;
+        } else {
+          console.error('[Supabase] Library not loaded yet - CDN may be blocked');
+          console.log('[Supabase] Available window properties:', Object.keys(window).filter(k => k.includes('supabase')));
+          return false;
+        }
+      } catch (error) {
+        console.error('[Supabase] Initialization failed:', error);
+        console.error('[Supabase] Error details:', error.message, error.stack);
+        return false;
+      }
+    }
+
+    // 测试 Supabase 连接
+    async function testSupabaseConnection() {
+      try {
+        console.log('[Supabase] Testing connection...');
+        
+        // 尝试简单的查询来测试连接
+        const { data, error } = await supabaseClient
+          .from('evolution_logs')
+          .select('count')
+          .limit(1);
+
+        if (error) {
+          console.error('[Supabase] Connection test failed:', error);
+          console.log('[Supabase] Connection failed - will use localStorage fallback');
+        } else {
+          console.log('[Supabase] Connection test successful!');
+          console.log('[Supabase] Cloud database is accessible');
+        }
+      } catch (testError) {
+        console.error('[Supabase] Connection test error:', testError);
+        console.log('[Supabase] Will continue with localStorage fallback');
+      }
+    }
+
     // ==================== 全局状态管理 ====================
     const AppState = {
       selectedDateKey: null,
@@ -406,14 +504,243 @@
       }
     }
 
-    function saveDateData(dateKey, data) {
+    function saveDateData(dateKey, data, showUserFeedback = false) {
       try {
         const all = loadData();
         all[dateKey] = data;
         saveData(all);
+        
+        // 同步到 Supabase
+        syncToSupabase(dateKey, data, showUserFeedback);
+        
         console.log('[saveDateData] Data saved for:', dateKey);
       } catch (error) {
         console.error('[saveDateData] Error:', error);
+      }
+    }
+
+    // ==================== Supabase 集成函数 ====================
+    
+    // 从 Supabase 加载数据
+    async function loadFromSupabase(dateKey) {
+      if (!supabaseClient) {
+        console.warn('[Supabase] Client not initialized');
+        return null;
+      }
+
+      try {
+        console.log('[Supabase] Loading data for:', dateKey);
+        
+        const { data, error } = await supabaseClient
+          .from('evolution_logs')
+          .select('*')
+          .eq('date_key', dateKey);
+
+        if (error) {
+          console.error('[Supabase] Load error:', error);
+          return null;
+        }
+
+        if (data && data.length > 0) {
+          const supabaseData = data[0];
+          console.log('[Supabase] Data found in cloud for:', dateKey);
+          return {
+            foods: supabaseData.foods || [],
+            exercises: supabaseData.exercises || [],
+            sleeps: supabaseData.sleeps || [],
+            skins: supabaseData.skins || [],
+            diaries: supabaseData.diaries || []
+          };
+        }
+
+        console.log('[Supabase] No data found in cloud for:', dateKey);
+        
+        // 数据迁移逻辑：如果云端是空的，检查本地是否有旧数据
+        const localData = getDateData(dateKey);
+        const hasLocalData = localData && (
+          (localData.foods && localData.foods.length > 0) ||
+          (localData.exercises && localData.exercises.length > 0) ||
+          (localData.sleeps && localData.sleeps.length > 0) ||
+          (localData.skins && localData.skins.length > 0) ||
+          (localData.diaries && localData.diaries.length > 0)
+        );
+
+        if (hasLocalData) {
+          console.log('[Supabase] Migrating local data to cloud for:', dateKey);
+          console.log('[Supabase] Local data summary:', {
+            foods: localData.foods?.length || 0,
+            exercises: localData.exercises?.length || 0,
+            sleeps: localData.sleeps?.length || 0,
+            skins: localData.skins?.length || 0,
+            diaries: localData.diaries?.length || 0
+          });
+          
+          // 自动上传本地数据到云端
+          await syncToSupabase(dateKey, localData);
+          console.log('[Supabase] Migration completed for:', dateKey);
+        } else {
+          console.log('[Supabase] No local data to migrate for:', dateKey);
+        }
+
+        return null;
+      } catch (error) {
+        console.error('[Supabase] Load failed:', error);
+        return null;
+      }
+    }
+
+    // 同步数据到 Supabase
+    async function syncToSupabase(dateKey, data, showUserFeedback = false) {
+      if (!supabaseClient) {
+        console.warn('[Supabase] Client not initialized - skipping cloud sync');
+        if (showUserFeedback && isFileProtocol()) {
+          showNotification('⚠️ 本地模式，数据仅保存在本地', 'warning');
+        }
+        return;
+      }
+
+      try {
+        console.log('[Supabase] Syncing data for:', dateKey);
+        console.log('[Supabase] Data summary:', {
+          foods: data.foods?.length || 0,
+          exercises: data.exercises?.length || 0,
+          sleeps: data.sleeps?.length || 0,
+          skins: data.skins?.length || 0,
+          diaries: data.diaries?.length || 0
+        });
+        
+        // 检查是否已存在记录
+        const { data: existing, error: checkError } = await supabaseClient
+          .from('evolution_logs')
+          .select('id')
+          .eq('date_key', dateKey);
+
+        if (checkError) {
+          console.error('[Supabase] Check error:', checkError);
+          console.log('[Supabase] Skipping sync due to check error');
+          if (showUserFeedback) {
+            showNotification('❌ 云同步检查失败', 'error');
+          }
+          return;
+        }
+
+        const recordData = {
+          date_key: dateKey,
+          foods: data.foods || [],
+          exercises: data.exercises || [],
+          sleeps: data.sleeps || [],
+          skins: data.skins || [],
+          diaries: data.diaries || [],
+          updated_at: new Date().toISOString()
+        };
+
+        if (existing && existing.length > 0) {
+          // 更新现有记录
+          console.log('[Supabase] Updating existing record for:', dateKey);
+          const { error: updateError } = await supabaseClient
+            .from('evolution_logs')
+            .update(recordData)
+            .eq('id', existing[0].id);
+
+          if (updateError) {
+            console.error('[Supabase] Update error:', updateError);
+            console.error('[Supabase] Update failed - data remains in localStorage only');
+            if (showUserFeedback) {
+              showNotification('❌ 云端更新失败', 'error');
+            }
+          } else {
+            console.log('[Supabase] Data updated successfully for:', dateKey);
+            if (showUserFeedback) {
+              showNotification('✅ 已同步到云端', 'success');
+            }
+          }
+        } else {
+          // 插入新记录
+          console.log('[Supabase] Inserting new record for:', dateKey);
+          const { error: insertError } = await supabaseClient
+            .from('evolution_logs')
+            .insert(recordData);
+
+          if (insertError) {
+            console.error('[Supabase] Insert error:', insertError);
+            console.error('[Supabase] Insert failed - data remains in localStorage only');
+            if (showUserFeedback) {
+              showNotification('❌ 云端保存失败', 'error');
+            }
+          } else {
+            console.log('[Supabase] Data inserted successfully for:', dateKey);
+            if (showUserFeedback) {
+              showNotification('✅ 已保存到云端', 'success');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[Supabase] Sync failed:', error);
+        console.error('[Supabase] Sync failed - data remains in localStorage only');
+        if (showUserFeedback) {
+          showNotification('❌ 云同步失败', 'error');
+        }
+      }
+    }
+
+    // 从 Supabase 删除记录
+    async function deleteFromSupabase(recordId, recordType, dateKey) {
+      if (!supabaseClient) {
+        console.warn('[Supabase] Client not initialized');
+        return;
+      }
+
+      try {
+        // 获取当前数据
+        const currentData = await loadFromSupabase(dateKey);
+        if (!currentData) return;
+
+        // 从对应数组中移除记录
+        const typeKey = `${recordType}s`;
+        if (currentData[typeKey]) {
+          currentData[typeKey] = currentData[typeKey].filter(item => item.id !== recordId);
+          
+          // 更新 Supabase
+          await syncToSupabase(dateKey, currentData);
+          console.log('[Supabase] Record deleted successfully:', recordId);
+        }
+      } catch (error) {
+        console.error('[Supabase] Delete failed:', error);
+      }
+    }
+
+    // 增强的 getDateData 函数 - 优先从 Supabase 加载
+    async function getDateDataEnhanced(dateKey) {
+      try {
+        // 先尝试从 Supabase 加载
+        const supabaseData = await loadFromSupabase(dateKey);
+        
+        if (supabaseData) {
+          // 合并本地数据（本地数据优先）
+          const localData = getDateData(dateKey);
+          const mergedData = {
+            foods: [...(localData.foods || []), ...(supabaseData.foods || [])],
+            exercises: [...(localData.exercises || []), ...(supabaseData.exercises || [])],
+            sleeps: [...(localData.sleeps || []), ...(supabaseData.sleeps || [])],
+            skins: [...(localData.skins || []), ...(supabaseData.skins || [])],
+            diaries: [...(localData.diaries || []), ...(supabaseData.diaries || [])]
+          };
+          
+          // 去重（基于 id）
+          Object.keys(mergedData).forEach(key => {
+            mergedData[key] = mergedData[key].filter((item, index, self) => 
+              index === self.findIndex(t => t.id === item.id)
+            );
+          });
+          
+          return mergedData;
+        } else {
+          // 回退到本地数据
+          return getDateData(dateKey);
+        }
+      } catch (error) {
+        console.error('[getDateDataEnhanced] Error:', error);
+        return getDateData(dateKey);
       }
     }
 
@@ -600,10 +927,10 @@
             }
           }
           
-          dayEl.addEventListener('click', () => {
+          dayEl.addEventListener('click', async () => {
             AppState.selectedDateKey = dateKey;
             renderCalendar();
-            renderDisplay();
+            await renderDisplay();
           });
           
           calGrid.appendChild(dayEl);
@@ -613,9 +940,10 @@
       }
     }
 
-    function renderDisplay() {
+    async function renderDisplay() {
       try {
-        const log = getDateData(AppState.selectedDateKey);
+        // 使用增强的数据加载函数
+        const log = await getDateDataEnhanced(AppState.selectedDateKey);
         const displayContent = document.getElementById('displayContent');
         
         if (!displayContent) {
@@ -735,7 +1063,7 @@
      * @param {string} type - 记录类型 (food, exercise, sleep, skin, diary)
      * @param {string} id - 记录ID
      */
-    function deleteItem(type, id) {
+    async function deleteItem(type, id) {
       try {
         // 确认对话框 Confirmation dialog
         const typeNames = {
@@ -778,8 +1106,11 @@
         // 保存数据到 localStorage Save data to localStorage
         saveDateData(AppState.selectedDateKey, log);
         
+        // 从 Supabase 删除记录
+        deleteFromSupabase(id, type, AppState.selectedDateKey);
+        
         // 刷新所有视图 Refresh all views
-        renderDisplay();
+        await renderDisplay();
         renderCalendar();
         
         console.log('[deleteItem] Item deleted successfully');
@@ -1127,25 +1458,56 @@
         if (!file) return;
         
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = async function(e) {
           try {
             const importedData = JSON.parse(e.target.result);
             
             if (typeof importedData === 'object' && importedData !== null) {
-              // 导入新数据
+              console.log('[Import] Starting import of', Object.keys(importedData).length, 'days of data');
+              
+              // 导入新数据到 localStorage
               Object.keys(importedData).forEach(dateKey => {
                 saveDateData(dateKey, importedData[dateKey]);
               });
               
+              // 立即同步所有数据到云端
+              if (supabaseClient) {
+                console.log('[Import] Starting immediate cloud sync...');
+                let syncSuccess = 0;
+                let syncFailed = 0;
+                
+                for (const dateKey of Object.keys(importedData)) {
+                  try {
+                    await syncToSupabase(dateKey, importedData[dateKey]);
+                    syncSuccess++;
+                  } catch (error) {
+                    console.error(`[Import] Failed to sync ${dateKey}:`, error);
+                    syncFailed++;
+                  }
+                }
+                
+                console.log(`[Import] Cloud sync completed: ${syncSuccess} success, ${syncFailed} failed`);
+                
+                // 显示导入结果
+                const message = syncFailed > 0 
+                  ? `数据导入成功！已导入 ${Object.keys(importedData).length} 天的数据。\n云端同步：${syncSuccess} 天成功，${syncFailed} 天失败`
+                  : `数据导入成功！已导入 ${Object.keys(importedData).length} 天的数据，并全部同步至云端`;
+                
+                alert(message);
+              } else {
+                console.log('[Import] Supabase not available, data saved locally only');
+                alert('数据导入成功！已导入 ' + Object.keys(importedData).length + ' 天的数据（仅本地存储）');
+              }
+              
               // 刷新显示
               renderCalendar();
-              renderDisplay();
+              await renderDisplay();
               
-              alert('数据导入成功！已导入 ' + Object.keys(importedData).length + ' 天的数据。');
             } else {
               alert('导入失败：文件格式不正确');
             }
           } catch (error) {
+            console.error('[Import] Parse error:', error);
             alert('导入失败：文件解析错误');
           }
         };
@@ -1158,23 +1520,281 @@
       }
     }
 
+    // ==================== 环境检测和通知 ====================
+    
+    // 检测运行环境
+    function isFileProtocol() {
+      return window.location.protocol === 'file:';
+    }
+
+    // 显示环境提醒
+    function showEnvironmentWarning() {
+      if (isFileProtocol()) {
+        console.log('[Environment] Running in file:// protocol, showing warning');
+        
+        // 创建提醒元素
+        const warning = document.createElement('div');
+        warning.className = 'env-warning';
+        warning.innerHTML = `
+          <button class="close-btn" onclick="this.parentElement.remove(); document.body.classList.remove('has-env-warning');">×</button>
+          ⚠️ 本地模式下云同步可能受限，建议上传至 GitHub Pages 使用
+        `;
+        
+        // 添加到页面
+        document.body.insertBefore(warning, document.body.firstChild);
+        document.body.classList.add('has-env-warning');
+        
+        // 10秒后自动隐藏
+        setTimeout(() => {
+          if (warning.parentElement) {
+            warning.remove();
+            document.body.classList.remove('has-env-warning');
+          }
+        }, 10000);
+      }
+    }
+
+    // 检测并提示本地数据同步
+    async function checkAndPromptLocalDataSync() {
+      if (!supabaseClient) {
+        console.log('[Sync] Supabase not available, skipping sync check');
+        return;
+      }
+
+      try {
+        const allLocalData = loadData();
+        const dateKeys = Object.keys(allLocalData);
+        
+        if (dateKeys.length === 0) {
+          console.log('[Sync] No local data found');
+          return;
+        }
+
+        console.log(`[Sync] Found ${dateKeys.length} days of local data, checking cloud status...`);
+
+        // 检查云端是否有数据
+        const { data: cloudData, error } = await supabaseClient
+          .from('evolution_logs')
+          .select('date_key')
+          .in('date_key', dateKeys.slice(0, 10)); // 只检查前10天以提高性能
+
+        if (error) {
+          console.error('[Sync] Cloud check failed:', error);
+          return;
+        }
+
+        const cloudDateKeys = new Set((cloudData || []).map(item => item.date_key));
+        const localOnlyData = dateKeys.filter(dateKey => !cloudDateKeys.has(dateKey));
+
+        if (localOnlyData.length > 0) {
+          console.log(`[Sync] Found ${localOnlyData.length} days of local-only data`);
+          
+          // 统计有效数据
+          let validDataCount = 0;
+          localOnlyData.forEach(dateKey => {
+            const dayData = allLocalData[dateKey];
+            if (dayData && (
+              (dayData.foods && dayData.foods.length > 0) ||
+              (dayData.exercises && dayData.exercises.length > 0) ||
+              (dayData.sleeps && dayData.sleeps.length > 0) ||
+              (dayData.skins && dayData.skins.length > 0) ||
+              (dayData.diaries && dayData.diaries.length > 0)
+            )) {
+              validDataCount++;
+            }
+          });
+
+          if (validDataCount > 0) {
+            // 静默同步或提示用户
+            const shouldAutoSync = localStorage.getItem('autoSyncEnabled') !== 'false';
+            
+            if (shouldAutoSync) {
+              console.log('[Sync] Auto-syncing local data to cloud...');
+              await performSilentSync(localOnlyData, allLocalData);
+            } else {
+              // 提示用户
+              const userResponse = confirm(`发现本地有 ${validDataCount} 天的存量数据，是否同步至云端？\n\n提示：可在设置中关闭此提示`);
+              if (userResponse) {
+                await performSilentSync(localOnlyData, allLocalData);
+              }
+              // 记住用户选择
+              localStorage.setItem('autoSyncEnabled', 'false');
+            }
+          }
+        } else {
+          console.log('[Sync] All local data already synced to cloud');
+        }
+      } catch (error) {
+        console.error('[Sync] Local data sync check failed:', error);
+      }
+    }
+
+    // 执行静默同步
+    async function performSilentSync(dateKeys, allData) {
+      console.log(`[Sync] Starting silent sync for ${dateKeys.length} days...`);
+      
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (const dateKey of dateKeys) {
+        try {
+          await syncToSupabase(dateKey, allData[dateKey]);
+          successCount++;
+        } catch (error) {
+          console.error(`[Sync] Failed to sync ${dateKey}:`, error);
+          failCount++;
+        }
+      }
+      
+      console.log(`[Sync] Silent sync completed: ${successCount} success, ${failCount} failed`);
+      
+      // 显示结果通知
+      if (failCount === 0) {
+        showNotification(`✅ 成功同步 ${successCount} 天的数据到云端`, 'success');
+      } else {
+        showNotification(`⚠️ 同步完成：${successCount} 天成功，${failCount} 天失败`, 'warning');
+      }
+    }
+
+    // 显示通知
+    function showNotification(message, type = 'info') {
+      const notification = document.createElement('div');
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${type === 'success' ? '#22c55e' : type === 'warning' ? '#f59e0b' : '#3b82f6'};
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        z-index: 10000;
+        font-size: 14px;
+        font-weight: 500;
+        max-width: 300px;
+        word-wrap: break-word;
+      `;
+      notification.textContent = message;
+      
+      document.body.appendChild(notification);
+      
+      // 3秒后自动移除
+      setTimeout(() => {
+        if (notification.parentElement) {
+          notification.remove();
+        }
+      }, 3000);
+    }
+
     // ==================== 初始化 ====================
     function init() {
       try {
         console.log('[init] Initializing application...');
         
+        // 显示环境提醒
+        showEnvironmentWarning();
+        
+        // 初始化 Supabase
+        const supabaseReady = initSupabase();
+        
         // 初始化选中今天
         AppState.selectedDateKey = getTodayKey();
         console.log('[init] Selected date:', AppState.selectedDateKey);
+        
+        // 异步加载 Supabase 数据并渲染界面
+        loadAndRenderData();
+        
+        // 如果 Supabase 可用，执行全面数据迁移检查
+        if (supabaseReady) {
+          setTimeout(() => {
+            checkAndPromptLocalDataSync();
+          }, 3000); // 延迟3秒执行，避免影响初始加载
+        }
+        
+        console.log('[init] Application initialized successfully');
+      } catch (error) {
+        console.error('[init] Error:', error);
+      }
+    }
+
+    // 检查并迁移所有本地数据
+    async function checkAndMigrateAllLocalData() {
+      try {
+        console.log('[Migration] Starting comprehensive local data check...');
+        
+        const allLocalData = loadData();
+        const dateKeys = Object.keys(allLocalData);
+        
+        if (dateKeys.length === 0) {
+          console.log('[Migration] No local data found to migrate');
+          return;
+        }
+        
+        console.log(`[Migration] Found ${dateKeys.length} days of local data`);
+        
+        let migratedCount = 0;
+        let failedCount = 0;
+        
+        for (const dateKey of dateKeys) {
+          try {
+            // 检查云端是否已有数据
+            const cloudData = await loadFromSupabase(dateKey);
+            
+            if (!cloudData) {
+              // 云端没有数据，检查本地是否有有效数据
+              const localData = allLocalData[dateKey];
+              const hasValidData = localData && (
+                (localData.foods && localData.foods.length > 0) ||
+                (localData.exercises && localData.exercises.length > 0) ||
+                (localData.sleeps && localData.sleeps.length > 0) ||
+                (localData.skins && localData.skins.length > 0) ||
+                (localData.diaries && localData.diaries.length > 0)
+              );
+              
+              if (hasValidData) {
+                console.log(`[Migration] Migrating data for ${dateKey}`);
+                await syncToSupabase(dateKey, localData);
+                migratedCount++;
+              }
+            }
+          } catch (error) {
+            console.error(`[Migration] Failed to migrate ${dateKey}:`, error);
+            failedCount++;
+          }
+        }
+        
+        console.log(`[Migration] Migration completed: ${migratedCount} migrated, ${failedCount} failed`);
+        
+      } catch (error) {
+        console.error('[Migration] Comprehensive migration failed:', error);
+      }
+    }
+
+    // 异步加载数据并渲染
+    async function loadAndRenderData() {
+      try {
+        // 使用增强的数据加载函数
+        const enhancedData = await getDateDataEnhanced(AppState.selectedDateKey);
+        
+        // 如果有 Supabase 数据，更新本地存储
+        if (enhancedData) {
+          const all = loadData();
+          all[AppState.selectedDateKey] = enhancedData;
+          saveData(all);
+        }
         
         // 渲染界面
         renderCalendar();
         renderDisplay();
         switchTab('food');
         
-        console.log('[init] Application initialized successfully');
+        console.log('[loadAndRenderData] Data loaded and rendered');
       } catch (error) {
-        console.error('[init] Error:', error);
+        console.error('[loadAndRenderData] Error:', error);
+        // 回退到基本渲染
+        renderCalendar();
+        renderDisplay();
+        switchTab('food');
       }
     }
 
@@ -1194,17 +1814,17 @@
         // 饮食记录
         const foodSubmit = document.getElementById('foodSubmit');
         if (foodSubmit) {
-          foodSubmit.addEventListener('click', () => {
+          foodSubmit.addEventListener('click', async () => {
             const input = document.getElementById('foodInput');
             const foods = parseFoodInput(input.value);
             if (foods.length === 0) return;
             
             const log = getDateData(AppState.selectedDateKey);
             log.foods = log.foods.concat(foods);
-            saveDateData(AppState.selectedDateKey, log);
+            saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             input.value = '';
-            renderDisplay();
+            await renderDisplay();
             renderCalendar();
           });
         }
@@ -1212,17 +1832,17 @@
         // 运动记录
         const exerciseSubmit = document.getElementById('exerciseSubmit');
         if (exerciseSubmit) {
-          exerciseSubmit.addEventListener('click', () => {
+          exerciseSubmit.addEventListener('click', async () => {
             const input = document.getElementById('exerciseInput');
             const exercises = parseExerciseInput(input.value);
             if (exercises.length === 0) return;
             
             const log = getDateData(AppState.selectedDateKey);
             log.exercises = log.exercises.concat(exercises);
-            saveDateData(AppState.selectedDateKey, log);
+            saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             input.value = '';
-            renderDisplay();
+            await renderDisplay();
             renderCalendar();
           });
         }
@@ -1230,7 +1850,7 @@
         // 睡眠记录
         const sleepSubmit = document.getElementById('sleepSubmit');
         if (sleepSubmit) {
-          sleepSubmit.addEventListener('click', () => {
+          sleepSubmit.addEventListener('click', async () => {
             const sleepTime = document.getElementById('sleepTimeInput').value;
             const wakeTime = document.getElementById('wakeTimeInput').value;
             const sleep = parseSleepInput(sleepTime, wakeTime);
@@ -1239,11 +1859,11 @@
             
             const log = getDateData(AppState.selectedDateKey);
             log.sleeps.push(sleep);
-            saveDateData(AppState.selectedDateKey, log);
+            saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             document.getElementById('sleepTimeInput').value = '';
             document.getElementById('wakeTimeInput').value = '';
-            renderDisplay();
+            await renderDisplay();
             renderCalendar();
           });
         }
@@ -1251,7 +1871,7 @@
         // 皮肤记录
         const skinSubmit = document.getElementById('skinSubmit');
         if (skinSubmit) {
-          skinSubmit.addEventListener('click', () => {
+          skinSubmit.addEventListener('click', async () => {
             const description = document.getElementById('skinConditionInput').value;
             const skin = parseSkinInput(description, '');
             
@@ -1259,10 +1879,10 @@
             
             const log = getDateData(AppState.selectedDateKey);
             log.skins.push(skin);
-            saveDateData(AppState.selectedDateKey, log);
+            saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             document.getElementById('skinConditionInput').value = '';
-            renderDisplay();
+            await renderDisplay();
             renderCalendar();
           });
         }
@@ -1270,7 +1890,7 @@
         // 日记记录
         const diarySubmit = document.getElementById('diarySubmit');
         if (diarySubmit) {
-          diarySubmit.addEventListener('click', () => {
+          diarySubmit.addEventListener('click', async () => {
             const content = document.getElementById('diaryInput').value;
             const diary = parseDiaryInput(content, '');
             
@@ -1278,10 +1898,10 @@
             
             const log = getDateData(AppState.selectedDateKey);
             log.diaries.push(diary);
-            saveDateData(AppState.selectedDateKey, log);
+            saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             document.getElementById('diaryInput').value = '';
-            renderDisplay();
+            await renderDisplay();
             renderCalendar();
           });
         }

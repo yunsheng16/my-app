@@ -2,7 +2,7 @@
   "name": "Personal Evolution Lab",
   "short_name": "PE Lab",
   "description": "全功能生活记录系统 - 记录饮食、运动、睡眠、护肤和日记",
-  "start_url": "./index.htmll",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#F8F9FA",
   "theme_color": "#6C63FF",
