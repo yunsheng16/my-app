@@ -1298,6 +1298,77 @@
     }
 
     // ==================== 渲染函数 ====================
+    // 显示指定日期的数据（不重新渲染日历）
+    async function displayDataForDate(dateKey) {
+      try {
+        console.log(`[displayDataForDate] Showing data for ${dateKey}`);
+        
+        // 更新选中状态
+        document.querySelectorAll('.calendar-day').forEach(el => {
+          el.classList.remove('active');
+        });
+        
+        // 找到对应的日期元素并添加active类
+        const targetDay = document.querySelector(`[data-date-key="${dateKey}"]`);
+        if (targetDay) {
+          targetDay.classList.add('active');
+        }
+        
+        // 从数据池获取数据并显示
+        const log = await getDateDataEnhanced(dateKey);
+        await renderDisplayWithData(log);
+        
+      } catch (error) {
+        console.error('[displayDataForDate] Error:', error);
+      }
+    }
+
+    // 渲染显示数据（独立函数）
+    async function renderDisplayWithData(data) {
+      try {
+        // 更新所有标签页的显示
+        const tabs = ['food', 'exercise', 'sleep', 'skin', 'diary'];
+        
+        tabs.forEach(tab => {
+          const container = document.getElementById(`${tab}List`);
+          if (container) {
+            container.innerHTML = '';
+            
+            const items = data[`${tab}s`] || [];
+            if (items.length > 0) {
+              items.forEach(item => {
+                const itemEl = createItemElement(item, tab);
+                container.appendChild(itemEl);
+              });
+            } else {
+              container.innerHTML = '<div class="text-muted text-sm p-4">暂无记录</div>';
+            }
+          }
+        });
+        
+      } catch (error) {
+        console.error('[renderDisplayWithData] Error:', error);
+      }
+    }
+
+    // 创建记录元素
+    function createItemElement(item, type) {
+      const div = document.createElement('div');
+      div.className = 'p-2 bg-surface rounded mb-1 flex items-center justify-between';
+      
+      const content = document.createElement('span');
+      content.textContent = item.content || item.name || '';
+      div.appendChild(content);
+      
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50';
+      deleteBtn.textContent = '删除';
+      deleteBtn.onclick = () => deleteItem(type, item.id);
+      
+      div.appendChild(deleteBtn);
+      return div;
+    }
+
     async function renderCalendar() {
       try {
         const year = AppState.currentDate.getFullYear();
@@ -1341,12 +1412,13 @@
           const dayEl = document.createElement('div');
           dayEl.className = 'calendar-day';
           dayEl.textContent = day;
+          dayEl.setAttribute('data-date-key', dateKey); // 添加数据属性用于快速查找
           
           if (dateKey === AppState.selectedDateKey) {
             dayEl.classList.add('active');
           }
           
-          // 使用增强的数据加载，优先从 Supabase 获取数据
+          // 使用增强的数据加载，优先从数据池获取数据
           const log = await getDateDataEnhanced(dateKey);
           if (log) {
             // 检查 JSONB 数组长度来绘制圆点
@@ -1377,10 +1449,10 @@
             }
           }
           
+          // 修复点击事件：只更新状态和显示数据，不重新渲染日历
           dayEl.addEventListener('click', async () => {
             AppState.selectedDateKey = dateKey;
-            await renderCalendar();
-            await renderDisplay();
+            await displayDataForDate(dateKey); // 使用新的显示函数
           });
           
           calGrid.appendChild(dayEl);
@@ -1558,9 +1630,8 @@
         
         console.log('[Supabase] Deletion synced to cloud');
         
-        // 刷新所有视图 Refresh all views
-        await renderDisplay();
-        await renderCalendar();
+        // 刷新显示（不重新渲染日历）
+        await displayDataForDate(AppState.selectedDateKey);
         
         console.log('[deleteItem] Item deleted successfully');
         
@@ -1935,9 +2006,8 @@
                 alert('导入成功！但 Supabase 未初始化，数据仅保存在本地');
               }
               
-              // 刷新显示
-              await renderCalendar();
-              await renderDisplay();
+              // 刷新显示（不重新渲染日历）
+              await displayDataForDate(AppState.selectedDateKey);
               
             } else {
               alert('导入失败：文件格式不正确');
@@ -2268,8 +2338,7 @@
             await saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             input.value = '';
-            await renderDisplay();
-            await renderCalendar();
+            await displayDataForDate(AppState.selectedDateKey);
           });
         }
         
@@ -2286,8 +2355,7 @@
             await saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             input.value = '';
-            await renderDisplay();
-            await renderCalendar();
+            await displayDataForDate(AppState.selectedDateKey);
           });
         }
         
@@ -2307,8 +2375,7 @@
             
             document.getElementById('sleepTimeInput').value = '';
             document.getElementById('wakeTimeInput').value = '';
-            await renderDisplay();
-            await renderCalendar();
+            await displayDataForDate(AppState.selectedDateKey);
           });
         }
         
@@ -2326,8 +2393,7 @@
             await saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             document.getElementById('skinConditionInput').value = '';
-            await renderDisplay();
-            await renderCalendar();
+            await displayDataForDate(AppState.selectedDateKey);
           });
         }
         
@@ -2345,8 +2411,7 @@
             await saveDateData(AppState.selectedDateKey, log, true); // 显示用户反馈
             
             document.getElementById('diaryInput').value = '';
-            await renderDisplay();
-            await renderCalendar();
+            await displayDataForDate(AppState.selectedDateKey);
           });
         }
         
