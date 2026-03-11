@@ -456,7 +456,9 @@
     const AppState = {
       selectedDateKey: null,
       currentDate: new Date(),
-      activeTab: 'food'
+      activeTab: 'food',
+      cloudLogs: {}, // 云端数据池 - 一次性全量加载的数据
+      isCloudDataLoaded: false // 标记云端数据是否已加载
     };
 
     // ==================== 工具函数 ====================
@@ -830,6 +832,68 @@
       }
     }
 
+    // 批量加载所有云端数据到数据池
+    async function loadAllCloudData() {
+      if (!supabaseClient || AppState.isCloudDataLoaded) {
+        console.log('[BulkLoad] Skipping - client not ready or data already loaded');
+        return;
+      }
+
+      try {
+        console.log('[BulkLoad] Starting bulk cloud data loading...');
+        
+        // 获取当前月份的日期范围
+        const year = AppState.currentDate.getFullYear();
+        const month = AppState.currentDate.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0);
+        
+        // 生成当前月份所有日期键
+        const dateKeys = [];
+        for (let day = 1; day <= lastDay.getDate(); day++) {
+          const dateKey = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+          dateKeys.push(dateKey);
+        }
+        
+        console.log(`[BulkLoad] Loading ${dateKeys.length} days for ${year}-${String(month + 1).padStart(2, '0')}`);
+        
+        // 批量查询当前月份的所有数据
+        const { data, error } = await supabaseClient
+          .from('evolution_logs')
+          .select('*')
+          .in('date_key', dateKeys);
+
+        if (error) {
+          console.error('[BulkLoad] Failed to load cloud data:', error);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          console.log(`[BulkLoad] Loaded ${data.length} records from cloud`);
+          
+          // 将数据填充到数据池
+          data.forEach(record => {
+            AppState.cloudLogs[record.date_key] = {
+              foods: record.foods || [],
+              exercises: record.exercises || [],
+              sleeps: record.sleeps || [],
+              skins: record.skins || [],
+              diaries: record.diaries || []
+            };
+          });
+          
+          AppState.isCloudDataLoaded = true;
+          console.log('[BulkLoad] Cloud data pool populated successfully');
+        } else {
+          console.log('[BulkLoad] No cloud data found for current month');
+          AppState.isCloudDataLoaded = true; // 标记为已加载，即使没有数据
+        }
+        
+      } catch (error) {
+        console.error('[BulkLoad] Bulk loading error:', error);
+      }
+    }
+
     function getDateData(dateKey) {
       try {
         const all = loadData();
@@ -846,23 +910,41 @@
       }
     }
 
-    // 增强的 getDateData - 优先从 Supabase 加载
+    // 增强的数据加载 - 优先从数据池获取，实现毫秒级切换
     async function getDateDataEnhanced(dateKey) {
       try {
-        // 优先从 Supabase 加载
+        // 1. 优先从数据池获取（毫秒级）
+        if (AppState.isCloudDataLoaded && AppState.cloudLogs[dateKey]) {
+          console.log(`[DataPool] Hit for ${dateKey} - instant access`);
+          return AppState.cloudLogs[dateKey];
+        }
+        
+        // 2. 如果数据池已加载但没有该日期的数据，返回空结构
+        if (AppState.isCloudDataLoaded && !AppState.cloudLogs[dateKey]) {
+          console.log(`[DataPool] Miss for ${dateKey} - returning empty structure`);
+          return { 
+            foods: [], 
+            exercises: [], 
+            sleeps: [], 
+            skins: [], 
+            diaries: [] 
+          };
+        }
+        
+        // 3. 数据池未加载时，降级到原来的逻辑
         if (supabaseClient) {
+          console.log(`[DataPool] Pool not ready, falling back to direct query for ${dateKey}`);
           const cloudData = await loadDataFromSupabase(dateKey);
           if (cloudData) {
-            console.log('[getDateData] Using cloud data for:', dateKey);
             return cloudData;
           }
         }
-
-        // 降级到 localStorage
-        console.log('[getDateData] Using local data for:', dateKey);
+        
+        // 4. 最后降级到 localStorage
+        console.log(`[DataPool] Falling back to localStorage for ${dateKey}`);
         return getDateData(dateKey);
       } catch (error) {
-        console.error('[getDateDataEnhanced] Error:', error);
+        console.error('[DataPool] Enhanced load error:', error);
         return getDateData(dateKey);
       }
     }
@@ -872,6 +954,12 @@
         const all = loadData();
         all[dateKey] = data;
         await saveData(all);
+        
+        // 同时更新数据池，确保一致性
+        if (AppState.isCloudDataLoaded) {
+          AppState.cloudLogs[dateKey] = data;
+          console.log(`[DataPool] Updated pool for ${dateKey}`);
+        }
         
         console.log('[Supabase] Data saved for:', dateKey);
       } catch (error) {
@@ -2052,8 +2140,11 @@
         // 异步加载 Supabase 数据并渲染界面
         loadAndRenderData();
         
-        // 如果 Supabase 可用，执行存量数据迁移
+        // 如果 Supabase 可用，执行批量数据加载
         if (supabaseReady) {
+          // 立即开始批量加载当前月份数据
+          loadAllCloudData();
+          
           setTimeout(() => {
             migrateLocalDataToCloud();
           }, 3000); // 延迟3秒执行，避免影响初始加载
@@ -2265,12 +2356,20 @@
         if (calPrev) {
           calPrev.addEventListener('click', async () => {
             AppState.currentDate.setMonth(AppState.currentDate.getMonth() - 1);
+            // 重置数据池状态，触发新月份的批量加载
+            AppState.isCloudDataLoaded = false;
+            AppState.cloudLogs = {};
+            await loadAllCloudData();
             await renderCalendar();
           });
         }
         if (calNext) {
           calNext.addEventListener('click', async () => {
             AppState.currentDate.setMonth(AppState.currentDate.getMonth() + 1);
+            // 重置数据池状态，触发新月份的批量加载
+            AppState.isCloudDataLoaded = false;
+            AppState.cloudLogs = {};
+            await loadAllCloudData();
             await renderCalendar();
           });
         }
