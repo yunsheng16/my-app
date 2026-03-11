@@ -488,7 +488,7 @@
         // 同步到 Supabase
         if (supabaseClient) {
           try {
-            // 将所有数据转换为适合 Supabase 的格式 (date_key, category, content)
+            // 将所有数据转换为适合 Supabase 的格式 (每条记录独立一行)
             const supabaseRecords = [];
             
             Object.keys(data).forEach(dateKey => {
@@ -556,13 +556,39 @@
             });
             
             if (supabaseRecords.length > 0) {
-              // 使用 upsert 批量同步数据
-              const { error } = await supabaseClient
-                .from('evolution_logs')
-                .upsert(supabaseRecords, { onConflict: 'date_key' });
+              console.log(`[Supabase] Preparing to sync ${supabaseRecords.length} individual records`);
               
-              if (error) {
-                console.error('[Supabase] Cloud Sync Failed:', error);
+              // 尝试批量同步
+              const { error: batchError } = await supabaseClient
+                .from('evolution_logs')
+                .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
+
+              if (batchError) {
+                console.error('[Supabase] Batch sync failed, trying individual records:', batchError);
+                
+                // 批量失败，改为单条重试
+                let successCount = 0;
+                let failCount = 0;
+                
+                for (const record of supabaseRecords) {
+                  try {
+                    const { error: singleError } = await supabaseClient
+                      .from('evolution_logs')
+                      .upsert(record, { onConflict: 'date_key, category, content' });
+                    
+                    if (singleError) {
+                      console.error(`[Supabase] Failed to sync record:`, singleError);
+                      failCount++;
+                    } else {
+                      successCount++;
+                    }
+                  } catch (retryError) {
+                    console.error(`[Supabase] Retry error:`, retryError);
+                    failCount++;
+                  }
+                }
+                
+                console.log(`[Supabase] Individual retry completed: ${successCount} success, ${failCount} failed`);
               } else {
                 console.log('[Supabase] Cloud Sync Success');
                 console.log(`[Supabase] Synced ${supabaseRecords.length} records to cloud`);
