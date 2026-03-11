@@ -486,88 +486,43 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         console.log('[Supabase] Data saved to localStorage successfully');
         
-        // 同步到 Supabase
+        // 同步到 Supabase - 使用 JSONB 列存储
         if (supabaseClient) {
           try {
-            // 将所有数据转换为适合 Supabase 的格式 (每条记录独立一行)
+            // 将所有数据转换为 JSONB 格式 (每个日期一行，包含所有分类的 JSONB 数组)
             const supabaseRecords = [];
             
             Object.keys(data).forEach(dateKey => {
               const dayData = data[dateKey];
               
-              // 处理饮食记录
-              if (dayData.foods && dayData.foods.length > 0) {
-                dayData.foods.forEach(food => {
-                  supabaseRecords.push({
-                    date_key: dateKey,
-                    category: 'food',
-                    content: food.content || food.name || '',
-                    created_at: new Date().toISOString()
-                  });
-                });
-              }
+              // 创建一条记录，包含所有 JSONB 列
+              const record = {
+                date_key: dateKey,
+                category: null,  // 严禁使用，设为 NULL
+                content: null,   // 严禁使用，设为 NULL
+                foods: dayData.foods || [],
+                exercises: dayData.exercises || [],
+                sleeps: dayData.sleeps || [],
+                skins: dayData.skins || [],
+                diaries: dayData.diaries || [],
+                updated_at: new Date().toISOString()
+              };
               
-              // 处理运动记录
-              if (dayData.exercises && dayData.exercises.length > 0) {
-                dayData.exercises.forEach(exercise => {
-                  supabaseRecords.push({
-                    date_key: dateKey,
-                    category: 'exercise',
-                    content: exercise.content || exercise.name || '',
-                    created_at: new Date().toISOString()
-                  });
-                });
-              }
-              
-              // 处理睡眠记录
-              if (dayData.sleeps && dayData.sleeps.length > 0) {
-                dayData.sleeps.forEach(sleep => {
-                  supabaseRecords.push({
-                    date_key: dateKey,
-                    category: 'sleep',
-                    content: sleep.content || `睡眠时间: ${sleep.sleepTime || ''} - ${sleep.wakeTime || ''}`,
-                    created_at: new Date().toISOString()
-                  });
-                });
-              }
-              
-              // 处理皮肤记录
-              if (dayData.skins && dayData.skins.length > 0) {
-                dayData.skins.forEach(skin => {
-                  supabaseRecords.push({
-                    date_key: dateKey,
-                    category: 'skin',
-                    content: skin.content || skin.description || '',
-                    created_at: new Date().toISOString()
-                  });
-                });
-              }
-              
-              // 处理日记记录
-              if (dayData.diaries && dayData.diaries.length > 0) {
-                dayData.diaries.forEach(diary => {
-                  supabaseRecords.push({
-                    date_key: dateKey,
-                    category: 'diary',
-                    content: diary.content || diary.text || '',
-                    created_at: new Date().toISOString()
-                  });
-                });
-              }
+              supabaseRecords.push(record);
             });
             
             if (supabaseRecords.length > 0) {
-              console.log(`[Supabase] Preparing to sync ${supabaseRecords.length} individual records`);
+              console.log(`[Supabase] Preparing to sync ${supabaseRecords.length} days as JSONB records`);
               
-              // 尝试批量同步
+              // 尝试批量同步 - 使用 date_key 唯一约束覆盖
               const { error: batchError } = await supabaseClient
                 .from('evolution_logs')
-                .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
+                .upsert(supabaseRecords, { onConflict: 'date_key' });
 
               if (batchError) {
                 console.error('[Supabase] Batch sync failed, trying individual records:', batchError);
                 
-                // 批量失败，改为单条重试
+                // 批量失败，单条重试
                 let successCount = 0;
                 let failCount = 0;
                 
@@ -575,16 +530,17 @@
                   try {
                     const { error: singleError } = await supabaseClient
                       .from('evolution_logs')
-                      .upsert(record, { onConflict: 'date_key, category, content' });
+                      .upsert(record, { onConflict: 'date_key' });
                     
                     if (singleError) {
-                      console.error(`[Supabase] Failed to sync record:`, singleError);
+                      console.error(`[Supabase] Failed to sync ${record.date_key}:`, singleError);
                       failCount++;
                     } else {
+                      console.log(`[Supabase] Successfully synced ${record.date_key}`);
                       successCount++;
                     }
                   } catch (retryError) {
-                    console.error(`[Supabase] Retry error:`, retryError);
+                    console.error(`[Supabase] Retry error for ${record.date_key}:`, retryError);
                     failCount++;
                   }
                 }
@@ -592,7 +548,7 @@
                 console.log(`[Supabase] Individual retry completed: ${successCount} success, ${failCount} failed`);
               } else {
                 console.log('[Supabase] Cloud Sync Success');
-                console.log(`[Supabase] Synced ${supabaseRecords.length} records to cloud`);
+                console.log(`[Supabase] Synced ${supabaseRecords.length} days to cloud`);
               }
             } else {
               console.log('[Supabase] No data to sync');
@@ -604,7 +560,7 @@
           console.log('[Supabase] Client not initialized, skipping cloud sync');
         }
       } catch (error) {
-        console.error('[saveData] Error:', error);
+        console.error('[Supabase] saveData Error:', error);
       }
     }
 
@@ -631,54 +587,16 @@
         if (data && data.length > 0) {
           console.log('[Supabase] Found cloud data for:', dateKey);
           
-          // 将云端数据转换为本地格式
+          // 新的 JSONB 架构：每行包含所有分类的数组
+          const record = data[0]; // 只取第一行，因为每个日期只有一行
+          
           const localData = {
-            foods: [],
-            exercises: [],
-            sleeps: [],
-            skins: [],
-            diaries: []
+            foods: record.foods || [],
+            exercises: record.exercises || [],
+            sleeps: record.sleeps || [],
+            skins: record.skins || [],
+            diaries: record.diaries || []
           };
-
-          data.forEach(record => {
-            switch (record.category) {
-              case 'food':
-                localData.foods.push({
-                  id: record.id || Date.now().toString(),
-                  content: record.content,
-                  timestamp: record.created_at
-                });
-                break;
-              case 'exercise':
-                localData.exercises.push({
-                  id: record.id || Date.now().toString(),
-                  content: record.content,
-                  timestamp: record.created_at
-                });
-                break;
-              case 'sleep':
-                localData.sleeps.push({
-                  id: record.id || Date.now().toString(),
-                  content: record.content,
-                  timestamp: record.created_at
-                });
-                break;
-              case 'skin':
-                localData.skins.push({
-                  id: record.id || Date.now().toString(),
-                  content: record.content,
-                  timestamp: record.created_at
-                });
-                break;
-              case 'diary':
-                localData.diaries.push({
-                  id: record.id || Date.now().toString(),
-                  content: record.content,
-                  timestamp: record.created_at
-                });
-                break;
-            }
-          });
 
           return localData;
         }
@@ -731,113 +649,30 @@
               if (hasData) {
                 console.log(`[Migration] Migrating data for ${dateKey}`);
                 
-                // 确保每个记录都有唯一的复合键
-                const supabaseRecords = [];
+                // 创建 JSONB 格式的记录
+                const record = {
+                  date_key: dateKey,
+                  category: null,  // 严禁使用，设为 NULL
+                  content: null,   // 严禁使用，设为 NULL
+                  foods: dayData.foods || [],
+                  exercises: dayData.exercises || [],
+                  sleeps: dayData.sleeps || [],
+                  skins: dayData.skins || [],
+                  diaries: dayData.diaries || [],
+                  updated_at: new Date().toISOString()
+                };
                 
-                // 处理饮食记录
-                if (dayData.foods && dayData.foods.length > 0) {
-                  dayData.foods.forEach((food, index) => {
-                    supabaseRecords.push({
-                      date_key: dateKey,
-                      category: 'food',
-                      content: food.content || food.name || '',
-                      created_at: new Date().toISOString()
-                    });
-                  });
-                }
-                
-                // 处理运动记录
-                if (dayData.exercises && dayData.exercises.length > 0) {
-                  dayData.exercises.forEach((exercise, index) => {
-                    supabaseRecords.push({
-                      date_key: dateKey,
-                      category: 'exercise',
-                      content: exercise.content || exercise.name || '',
-                      created_at: new Date().toISOString()
-                    });
-                  });
-                }
-                
-                // 处理睡眠记录
-                if (dayData.sleeps && dayData.sleeps.length > 0) {
-                  dayData.sleeps.forEach((sleep, index) => {
-                    supabaseRecords.push({
-                      date_key: dateKey,
-                      category: 'sleep',
-                      content: sleep.content || `睡眠时间: ${sleep.sleepTime || ''} - ${sleep.wakeTime || ''}`,
-                      created_at: new Date().toISOString()
-                    });
-                  });
-                }
-                
-                // 处理皮肤记录
-                if (dayData.skins && dayData.skins.length > 0) {
-                  dayData.skins.forEach((skin, index) => {
-                    supabaseRecords.push({
-                      date_key: dateKey,
-                      category: 'skin',
-                      content: skin.content || skin.description || '',
-                      created_at: new Date().toISOString()
-                    });
-                  });
-                }
-                
-                // 处理日记记录
-                if (dayData.diaries && dayData.diaries.length > 0) {
-                  dayData.diaries.forEach((diary, index) => {
-                    supabaseRecords.push({
-                      date_key: dateKey,
-                      category: 'diary',
-                      content: diary.content || diary.text || '',
-                      created_at: new Date().toISOString()
-                    });
-                  });
-                }
+                // 上传到云端 - 使用 date_key 唯一约束覆盖
+                const { error } = await supabaseClient
+                  .from('evolution_logs')
+                  .upsert(record, { onConflict: 'date_key' });
 
-                if (supabaseRecords.length > 0) {
-                  console.log(`[Migration] Preparing to upload ${supabaseRecords.length} records for ${dateKey}`);
-                  
-                  // 尝试批量上传
-                  const { error: batchError } = await supabaseClient
-                    .from('evolution_logs')
-                    .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
-
-                  if (batchError) {
-                    console.error(`[Migration] Batch upload failed for ${dateKey}, trying individual records:`, batchError);
-                    
-                    // 批量失败，单条重试
-                    let daySuccessCount = 0;
-                    let dayFailCount = 0;
-                    
-                    for (const record of supabaseRecords) {
-                      try {
-                        const { error: singleError } = await supabaseClient
-                          .from('evolution_logs')
-                          .upsert(record, { onConflict: 'date_key, category, content' });
-                        
-                        if (singleError) {
-                          console.error(`[Migration] Failed to upload record for ${dateKey}:`, singleError);
-                          dayFailCount++;
-                        } else {
-                          daySuccessCount++;
-                        }
-                      } catch (retryError) {
-                        console.error(`[Migration] Retry error for ${dateKey}:`, retryError);
-                        dayFailCount++;
-                      }
-                    }
-                    
-                    console.log(`[Migration] Individual retry for ${dateKey}: ${daySuccessCount} success, ${dayFailCount} failed`);
-                    
-                    if (daySuccessCount > 0) {
-                      totalMigrated++;
-                    } else {
-                      totalFailed++;
-                    }
-                  } else {
-                    console.log(`[Migration] Successfully migrated ${dateKey}`);
-                    totalMigrated++;
-                  }
+                if (error) {
+                  console.error(`[Migration] Failed to migrate ${dateKey}:`, error);
+                  totalFailed++;
+                } else {
+                  console.log(`[Migration] Successfully migrated ${dateKey}`);
+                  totalMigrated++;
                 }
               }
             } else {
@@ -945,121 +780,48 @@
           return { success: true, message: '没有本地数据需要同步' };
         }
 
-        let totalRecords = 0;
         let successCount = 0;
         let failCount = 0;
 
-        // 遍历所有日期数据
+        // 遍历所有日期数据 - 每个日期一条 JSONB 记录
         for (const dateKey of dateKeys) {
           const dayData = localData[dateKey];
           
-          // 转换为 Supabase 格式
-          const supabaseRecords = [];
-          
-          // 处理饮食记录
-          if (dayData.foods && dayData.foods.length > 0) {
-            dayData.foods.forEach(food => {
-              supabaseRecords.push({
-                date_key: dateKey,
-                category: 'food',
-                content: food.content || food.name || '',
-                created_at: new Date().toISOString()
-              });
-            });
-          }
-          
-          // 处理运动记录
-          if (dayData.exercises && dayData.exercises.length > 0) {
-            dayData.exercises.forEach(exercise => {
-              supabaseRecords.push({
-                date_key: dateKey,
-                category: 'exercise',
-                content: exercise.content || exercise.name || '',
-                created_at: new Date().toISOString()
-              });
-            });
-          }
-          
-          // 处理睡眠记录
-          if (dayData.sleeps && dayData.sleeps.length > 0) {
-            dayData.sleeps.forEach(sleep => {
-              supabaseRecords.push({
-                date_key: dateKey,
-                category: 'sleep',
-                content: sleep.content || `睡眠时间: ${sleep.sleepTime || ''} - ${sleep.wakeTime || ''}`,
-                created_at: new Date().toISOString()
-              });
-            });
-          }
-          
-          // 处理皮肤记录
-          if (dayData.skins && dayData.skins.length > 0) {
-            dayData.skins.forEach(skin => {
-              supabaseRecords.push({
-                date_key: dateKey,
-                category: 'skin',
-                content: skin.content || skin.description || '',
-                created_at: new Date().toISOString()
-              });
-            });
-          }
-          
-          // 处理日记记录
-          if (dayData.diaries && dayData.diaries.length > 0) {
-            dayData.diaries.forEach(diary => {
-              supabaseRecords.push({
-                date_key: dateKey,
-                category: 'diary',
-                content: diary.content || diary.text || '',
-                created_at: new Date().toISOString()
-              });
-            });
-          }
+          // 创建 JSONB 格式的记录
+          const record = {
+            date_key: dateKey,
+            category: null,  // 严禁使用，设为 NULL
+            content: null,   // 严禁使用，设为 NULL
+            foods: dayData.foods || [],
+            exercises: dayData.exercises || [],
+            sleeps: dayData.sleeps || [],
+            skins: dayData.skins || [],
+            diaries: dayData.diaries || [],
+            updated_at: new Date().toISOString()
+          };
 
-          totalRecords += supabaseRecords.length;
+          console.log(`[Supabase] Syncing JSONB record for ${dateKey}`);
+          
+          // 尝试同步 - 使用 date_key 唯一约束覆盖
+          const { error } = await supabaseClient
+            .from('evolution_logs')
+            .upsert(record, { onConflict: 'date_key' });
 
-          if (supabaseRecords.length > 0) {
-            console.log(`[Supabase] Syncing ${supabaseRecords.length} records for ${dateKey}`);
-            
-            // 尝试批量同步
-            const { error: batchError } = await supabaseClient
-              .from('evolution_logs')
-              .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
-
-            if (batchError) {
-              console.error(`[Supabase] Batch sync failed for ${dateKey}, trying individual records:`, batchError);
-              
-              // 批量失败，单条重试
-              for (const record of supabaseRecords) {
-                try {
-                  const { error: singleError } = await supabaseClient
-                    .from('evolution_logs')
-                    .upsert(record, { onConflict: 'date_key, category, content' });
-                  
-                  if (singleError) {
-                    console.error(`[Supabase] Failed to sync record for ${dateKey}:`, singleError);
-                    failCount++;
-                  } else {
-                    successCount++;
-                  }
-                } catch (retryError) {
-                  console.error(`[Supabase] Retry error for ${dateKey}:`, retryError);
-                  failCount++;
-                }
-              }
-            } else {
-              console.log(`[Supabase] Successfully synced ${dateKey}`);
-              successCount += supabaseRecords.length;
-            }
+          if (error) {
+            console.error(`[Supabase] Failed to sync ${dateKey}:`, error);
+            failCount++;
+          } else {
+            console.log(`[Supabase] Successfully synced ${dateKey}`);
+            successCount++;
           }
         }
         
-        console.log(`[Supabase] Forced sync completed: ${successCount} success, ${failCount} failed, ${totalRecords} total`);
+        console.log(`[Supabase] Forced sync completed: ${successCount} success, ${failCount} failed`);
         
         if (failCount === 0) {
-          return { success: true, message: `云端同步成功，共同步 ${successCount} 条记录` };
+          return { success: true, message: `云端同步成功，共同步 ${successCount} 天数据` };
         } else {
-          return { success: false, message: `同步失败，${successCount} 条成功，${failCount} 条失败` };
+          return { success: false, message: `同步失败，${successCount} 天成功，${failCount} 天失败` };
         }
         
       } catch (error) {
