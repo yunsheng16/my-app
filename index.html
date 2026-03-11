@@ -709,39 +709,219 @@
         }
 
         let totalMigrated = 0;
+        let totalFailed = 0;
         
         for (const dateKey of dateKeys) {
-          // 检查云端是否已有数据
-          const cloudData = await loadDataFromSupabase(dateKey);
-          
-          if (!cloudData) {
-            // 云端没有数据，检查本地是否有数据
-            const dayData = localData[dateKey];
-            const hasData = dayData && (
-              (dayData.foods && dayData.foods.length > 0) ||
-              (dayData.exercises && dayData.exercises.length > 0) ||
-              (dayData.sleeps && dayData.sleeps.length > 0) ||
-              (dayData.skins && dayData.skins.length > 0) ||
-              (dayData.diaries && dayData.diaries.length > 0)
-            );
+          try {
+            // 检查云端是否已有数据
+            const cloudData = await loadDataFromSupabase(dateKey);
+            
+            if (!cloudData) {
+              // 云端没有数据，检查本地是否有数据
+              const dayData = localData[dateKey];
+              const hasData = dayData && (
+                (dayData.foods && dayData.foods.length > 0) ||
+                (dayData.exercises && dayData.exercises.length > 0) ||
+                (dayData.sleeps && dayData.sleeps.length > 0) ||
+                (dayData.skins && dayData.skins.length > 0) ||
+                (dayData.diaries && dayData.diaries.length > 0)
+              );
 
-            if (hasData) {
-              console.log(`[Migration] Migrating data for ${dateKey}`);
-              
-              // 保存本地数据到云端
-              await saveData({ [dateKey]: dayData });
-              totalMigrated++;
+              if (hasData) {
+                console.log(`[Migration] Migrating data for ${dateKey}`);
+                
+                // 确保每个记录都有唯一的复合键
+                const supabaseRecords = [];
+                
+                // 处理饮食记录
+                if (dayData.foods && dayData.foods.length > 0) {
+                  dayData.foods.forEach((food, index) => {
+                    supabaseRecords.push({
+                      date_key: dateKey,
+                      category: 'food',
+                      content: food.content || food.name || '',
+                      created_at: new Date().toISOString()
+                    });
+                  });
+                }
+                
+                // 处理运动记录
+                if (dayData.exercises && dayData.exercises.length > 0) {
+                  dayData.exercises.forEach((exercise, index) => {
+                    supabaseRecords.push({
+                      date_key: dateKey,
+                      category: 'exercise',
+                      content: exercise.content || exercise.name || '',
+                      created_at: new Date().toISOString()
+                    });
+                  });
+                }
+                
+                // 处理睡眠记录
+                if (dayData.sleeps && dayData.sleeps.length > 0) {
+                  dayData.sleeps.forEach((sleep, index) => {
+                    supabaseRecords.push({
+                      date_key: dateKey,
+                      category: 'sleep',
+                      content: sleep.content || `睡眠时间: ${sleep.sleepTime || ''} - ${sleep.wakeTime || ''}`,
+                      created_at: new Date().toISOString()
+                    });
+                  });
+                }
+                
+                // 处理皮肤记录
+                if (dayData.skins && dayData.skins.length > 0) {
+                  dayData.skins.forEach((skin, index) => {
+                    supabaseRecords.push({
+                      date_key: dateKey,
+                      category: 'skin',
+                      content: skin.content || skin.description || '',
+                      created_at: new Date().toISOString()
+                    });
+                  });
+                }
+                
+                // 处理日记记录
+                if (dayData.diaries && dayData.diaries.length > 0) {
+                  dayData.diaries.forEach((diary, index) => {
+                    supabaseRecords.push({
+                      date_key: dateKey,
+                      category: 'diary',
+                      content: diary.content || diary.text || '',
+                      created_at: new Date().toISOString()
+                    });
+                  });
+                }
+
+                if (supabaseRecords.length > 0) {
+                  console.log(`[Migration] Preparing to upload ${supabaseRecords.length} records for ${dateKey}`);
+                  
+                  // 尝试批量上传
+                  const { error: batchError } = await supabaseClient
+                    .from('evolution_logs')
+                    .upsert(supabaseRecords, { onConflict: 'date_key, category, content' });
+
+                  if (batchError) {
+                    console.error(`[Migration] Batch upload failed for ${dateKey}, trying individual records:`, batchError);
+                    
+                    // 批量失败，单条重试
+                    let daySuccessCount = 0;
+                    let dayFailCount = 0;
+                    
+                    for (const record of supabaseRecords) {
+                      try {
+                        const { error: singleError } = await supabaseClient
+                          .from('evolution_logs')
+                          .upsert(record, { onConflict: 'date_key, category, content' });
+                        
+                        if (singleError) {
+                          console.error(`[Migration] Failed to upload record for ${dateKey}:`, singleError);
+                          dayFailCount++;
+                        } else {
+                          daySuccessCount++;
+                        }
+                      } catch (retryError) {
+                        console.error(`[Migration] Retry error for ${dateKey}:`, retryError);
+                        dayFailCount++;
+                      }
+                    }
+                    
+                    console.log(`[Migration] Individual retry for ${dateKey}: ${daySuccessCount} success, ${dayFailCount} failed`);
+                    
+                    if (daySuccessCount > 0) {
+                      totalMigrated++;
+                    } else {
+                      totalFailed++;
+                    }
+                  } else {
+                    console.log(`[Migration] Successfully migrated ${dateKey}`);
+                    totalMigrated++;
+                  }
+                }
+              }
+            } else {
+              console.log(`[Migration] Data already exists for ${dateKey}, skipping`);
             }
+          } catch (dateError) {
+            console.error(`[Migration] Error processing ${dateKey}:`, dateError);
+            totalFailed++;
           }
         }
         
-        if (totalMigrated > 0) {
-          console.log(`[Migration] Migration completed: ${totalMigrated} days migrated`);
+        console.log(`[Migration] Migration completed: ${totalMigrated} days migrated, ${totalFailed} days failed`);
+        
+        // 如果有失败的，标记需要重试
+        if (totalFailed > 0) {
+          localStorage.setItem('pendingMigration', JSON.stringify({
+            dateKeys: dateKeys.filter(dateKey => {
+              // 这里可以添加更复杂的逻辑来识别失败的日期
+              return true; // 简化处理，下次启动时重试
+            }),
+            timestamp: new Date().toISOString()
+          }));
+          console.log('[Migration] Failed dates marked for retry');
         } else {
-          console.log('[Migration] All data already synced to cloud');
+          // 清除待重试标记
+          localStorage.removeItem('pendingMigration');
+          console.log('[Migration] All dates migrated successfully');
         }
+        
       } catch (error) {
         console.error('[Migration] Migration failed:', error);
+      }
+    }
+
+    // 检查并重试待迁移数据
+    async function retryPendingMigrations() {
+      try {
+        const pendingMigration = localStorage.getItem('pendingMigration');
+        if (pendingMigration) {
+          const { dateKeys, timestamp } = JSON.parse(pendingMigration);
+          const hoursSince = (Date.now() - new Date(timestamp).getTime()) / (1000 * 60 * 60);
+          
+          if (hoursSince > 1) { // 超过1小时的重试
+            console.log('[Retry] Found pending migration, retrying failed dates');
+            
+            let retrySuccess = 0;
+            let retryFailed = 0;
+            
+            for (const dateKey of dateKeys) {
+              try {
+                const localData = loadData();
+                const dayData = localData[dateKey];
+                
+                if (dayData) {
+                  console.log(`[Retry] Retrying migration for ${dateKey}`);
+                  
+                  // 使用增强的保存逻辑
+                  await saveData({ [dateKey]: dayData });
+                  retrySuccess++;
+                }
+              } catch (retryError) {
+                console.error(`[Retry] Failed to retry ${dateKey}:`, retryError);
+                retryFailed++;
+              }
+            }
+            
+            console.log(`[Retry] Retry completed: ${retrySuccess} success, ${retryFailed} failed`);
+            
+            // 如果全部成功，清除待重试标记
+            if (retryFailed === 0) {
+              localStorage.removeItem('pendingMigration');
+              console.log('[Retry] All pending migrations completed successfully');
+            } else {
+              // 更新时间戳，1小时后再试
+              localStorage.setItem('pendingMigration', JSON.stringify({
+                dateKeys: dateKeys,
+                timestamp: new Date().toISOString()
+              }));
+            }
+          } else {
+            console.log('[Retry] Pending migration too recent, skipping');
+          }
+        }
+      } catch (error) {
+        console.error('[Retry] Error checking pending migrations:', error);
       }
     }
 
@@ -1987,6 +2167,11 @@
           setTimeout(() => {
             migrateLocalDataToCloud();
           }, 3000); // 延迟3秒执行，避免影响初始加载
+          
+          // 检查并重试待迁移数据
+          setTimeout(() => {
+            retryPendingMigrations();
+          }, 5000); // 延迟5秒执行重试检查
         }
         
         console.log('[init] Application initialized successfully');
