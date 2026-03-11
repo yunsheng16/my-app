@@ -913,22 +913,29 @@
     // 增强的数据加载 - 优先从数据池获取，实现毫秒级切换
     async function getDateDataEnhanced(dateKey) {
       try {
+        console.log(`[getDateDataEnhanced] Requesting data for ${dateKey}`);
+        console.log(`[getDateDataEnhanced] Pool loaded: ${AppState.isCloudDataLoaded}`);
+        console.log(`[getDateDataEnhanced] Pool keys:`, Object.keys(AppState.cloudLogs));
+        
         // 1. 优先从数据池获取（毫秒级）
         if (AppState.isCloudDataLoaded && AppState.cloudLogs[dateKey]) {
           console.log(`[DataPool] Hit for ${dateKey} - instant access`);
+          console.log(`[DataPool] Data:`, AppState.cloudLogs[dateKey]);
           return AppState.cloudLogs[dateKey];
         }
         
         // 2. 如果数据池已加载但没有该日期的数据，返回空结构
         if (AppState.isCloudDataLoaded && !AppState.cloudLogs[dateKey]) {
           console.log(`[DataPool] Miss for ${dateKey} - returning empty structure`);
-          return { 
+          const emptyData = { 
             foods: [], 
             exercises: [], 
             sleeps: [], 
             skins: [], 
             diaries: [] 
           };
+          console.log(`[DataPool] Empty data:`, emptyData);
+          return emptyData;
         }
         
         // 3. 数据池未加载时，降级到原来的逻辑
@@ -936,13 +943,16 @@
           console.log(`[DataPool] Pool not ready, falling back to direct query for ${dateKey}`);
           const cloudData = await loadDataFromSupabase(dateKey);
           if (cloudData) {
+            console.log(`[DataPool] Direct query result:`, cloudData);
             return cloudData;
           }
         }
         
         // 4. 最后降级到 localStorage
         console.log(`[DataPool] Falling back to localStorage for ${dateKey}`);
-        return getDateData(dateKey);
+        const localData = getDateData(dateKey);
+        console.log(`[DataPool] LocalStorage data:`, localData);
+        return localData;
       } catch (error) {
         console.error('[DataPool] Enhanced load error:', error);
         return getDateData(dateKey);
@@ -1326,25 +1336,85 @@
     // 渲染显示数据（独立函数）
     async function renderDisplayWithData(data) {
       try {
-        // 更新所有标签页的显示
-        const tabs = ['food', 'exercise', 'sleep', 'skin', 'diary'];
+        const displayContent = document.getElementById('displayContent');
         
-        tabs.forEach(tab => {
-          const container = document.getElementById(`${tab}List`);
-          if (container) {
-            container.innerHTML = '';
-            
-            const items = data[`${tab}s`] || [];
-            if (items.length > 0) {
-              items.forEach(item => {
-                const itemEl = createItemElement(item, tab);
-                container.appendChild(itemEl);
-              });
-            } else {
-              container.innerHTML = '<div class="text-muted text-sm p-4">暂无记录</div>';
-            }
-          }
-        });
+        if (!displayContent) {
+          console.error('[renderDisplayWithData] Display element not found');
+          return;
+        }
+        
+        console.log('[renderDisplayWithData] Rendering data:', data);
+        
+        let html = '';
+        
+        // 饮食记录
+        if (data.foods && data.foods.length > 0) {
+          html += '<div class="mb-4"><div class="flex items-center justify-between mb-2"><h4 class="font-medium">🍽️ 饮食记录</h4><button onclick="copyCategory(\'food\')" class="text-blue-500 hover:text-blue-700 text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50">📋 复制</button></div>';
+          data.foods.forEach(item => {
+            html += `<div class="p-2 bg-surface rounded mb-1 flex items-center justify-between">
+                      <span>${item.content || item.name || ''}</span>
+                      <button onclick="deleteItem('food', '${item.id}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50">删除</button>
+                    </div>`;
+          });
+          html += '</div>';
+        }
+        
+        // 运动记录
+        if (data.exercises && data.exercises.length > 0) {
+          html += '<div class="mb-4"><div class="flex items-center justify-between mb-2"><h4 class="font-medium">🏃 运动记录</h4><button onclick="copyCategory(\'exercise\')" class="text-blue-500 hover:text-blue-700 text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50">📋 复制</button></div>';
+          data.exercises.forEach(item => {
+            html += `<div class="p-2 bg-surface rounded mb-1 flex items-center justify-between">
+                      <span>${item.content || item.name || ''}</span>
+                      <button onclick="deleteItem('exercise', '${item.id}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50">删除</button>
+                    </div>`;
+          });
+          html += '</div>';
+        }
+        
+        // 睡眠记录
+        if (data.sleeps && data.sleeps.length > 0) {
+          html += '<div class="mb-4"><div class="flex items-center justify-between mb-2"><h4 class="font-medium">😴 睡眠记录</h4><button onclick="copyCategory(\'sleep\')" class="text-blue-500 hover:text-blue-700 text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50">📋 复制</button></div>';
+          data.sleeps.forEach(item => {
+            html += `<div class="p-2 bg-surface rounded mb-1 flex items-center justify-between">
+                      <span>${item.content || ''}</span>
+                      <button onclick="deleteItem('sleep', '${item.id}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50">删除</button>
+                    </div>`;
+          });
+          html += '</div>';
+        }
+        
+        // 皮肤记录
+        if (data.skins && data.skins.length > 0) {
+          html += '<div class="mb-4"><div class="flex items-center justify-between mb-2"><h4 class="font-medium">🧴 皮肤记录</h4><button onclick="copyCategory(\'skin\')" class="text-blue-500 hover:text-blue-700 text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50">📋 复制</button></div>';
+          data.skins.forEach(item => {
+            html += `<div class="p-2 bg-surface rounded mb-1 flex items-center justify-between">
+                      <span>${item.content || item.description || ''}</span>
+                      <button onclick="deleteItem('skin', '${item.id}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50">删除</button>
+                    </div>`;
+          });
+          html += '</div>';
+        }
+        
+        // 日记记录
+        if (data.diaries && data.diaries.length > 0) {
+          html += '<div class="mb-4"><div class="flex items-center justify-between mb-2"><h4 class="font-medium">📝 日记记录</h4><button onclick="copyCategory(\'diary\')" class="text-blue-500 hover:text-blue-700 text-xs px-2 py-1 rounded border border-blue-300 hover:bg-blue-50">📋 复制</button></div>';
+          data.diaries.forEach(item => {
+            html += `<div class="p-2 bg-surface rounded mb-1 flex items-center justify-between">
+                      <span>${item.content || item.text || ''}</span>
+                      <button onclick="deleteItem('diary', '${item.id}')" class="text-red-500 hover:text-red-700 text-xs px-2 py-1 rounded border border-red-300 hover:bg-red-50">删除</button>
+                    </div>`;
+          });
+          html += '</div>';
+        }
+        
+        // 更新显示内容
+        if (html === '') {
+          displayContent.innerHTML = '<p class="text-muted text-center">暂无数据</p>';
+        } else {
+          displayContent.innerHTML = html;
+        }
+        
+        console.log('[renderDisplayWithData] UI updated successfully');
         
       } catch (error) {
         console.error('[renderDisplayWithData] Error:', error);
