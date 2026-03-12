@@ -1940,11 +1940,67 @@
       }
     }
 
+    // 获取所有数据（优先从数据池，补充 localStorage）
+    function getAllDataFromPool() {
+      try {
+        console.log('[getAllDataFromPool] Collecting all data from pool and localStorage...');
+        
+        // 1. 从数据池获取数据
+        let allData = {};
+        
+        if (AppState.isCloudDataLoaded && Object.keys(AppState.cloudLogs).length > 0) {
+          console.log(`[getAllDataFromPool] Found ${Object.keys(AppState.cloudLogs).length} dates in data pool`);
+          allData = { ...AppState.cloudLogs };
+        } else {
+          console.log('[getAllDataFromPool] Data pool not loaded or empty');
+        }
+        
+        // 2. 从 localStorage 补充数据（处理数据池未加载的情况）
+        const localData = loadData();
+        console.log(`[getAllDataFromPool] Found ${Object.keys(localData).length} dates in localStorage`);
+        
+        // 合并数据，数据池优先
+        Object.keys(localData).forEach(dateKey => {
+          if (!allData[dateKey]) {
+            allData[dateKey] = localData[dateKey];
+          }
+        });
+        
+        console.log(`[getAllDataFromPool] Total combined data: ${Object.keys(allData).length} dates`);
+        console.log('[getAllDataFromPool] Date keys:', Object.keys(allData).sort());
+        
+        return allData;
+      } catch (error) {
+        console.error('[getAllDataFromPool] Error:', error);
+        // 降级到 localStorage
+        return loadData();
+      }
+    }
+
     // ==================== 导出导入功能 ====================
     function exportData() {
       try {
-        const allData = loadData();
-        const dataStr = JSON.stringify(allData, null, 2);
+        console.log('[exportData] Starting export from data pool...');
+        
+        // 从数据池获取所有数据
+        const allData = getAllDataFromPool();
+        
+        console.log(`[exportData] Exporting ${Object.keys(allData).length} dates of data`);
+        
+        // 数据预处理：确保 JSONB 格式正确
+        const processedData = {};
+        Object.keys(allData).forEach(dateKey => {
+          const dayData = allData[dateKey];
+          processedData[dateKey] = {
+            foods: dayData.foods || [],
+            exercises: dayData.exercises || [],
+            sleeps: dayData.sleeps || [],
+            skins: dayData.skins || [],
+            diaries: dayData.diaries || []
+          };
+        });
+        
+        const dataStr = JSON.stringify(processedData, null, 2);
         const blob = new Blob([dataStr], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -1953,8 +2009,8 @@
         link.click();
         URL.revokeObjectURL(url);
         
-        console.log('[exportData] Data exported successfully');
-        alert('数据导出成功！');
+        console.log('[exportData] Data exported successfully from data pool');
+        alert(`数据导出成功！共导出 ${Object.keys(processedData).length} 天的数据`);
       } catch (error) {
         console.error('[exportData] Error:', error);
         alert('导出失败：' + error.message);
@@ -1963,58 +2019,76 @@
 
     function exportTableData() {
       try {
-        const allData = loadData();
+        console.log('[exportTableData] Starting table export from data pool...');
+        
+        // 从数据池获取所有数据
+        const allData = getAllDataFromPool();
+        
+        console.log(`[exportTableData] Processing ${Object.keys(allData).length} dates for table export`);
+        
         let csvData = [];
+        let totalRecords = 0;
         
         // CSV 表头
         csvData.push(['日期', '类型', '内容', '时间', '标签/详情'].join(','));
         
-        // 遍历所有数据
-        Object.keys(allData).forEach(dateKey => {
+        // 遍历所有数据并平铺 JSONB 数组
+        Object.keys(allData).sort().forEach(dateKey => {
           const dayData = allData[dateKey];
           
-          // 饮食记录
+          // 饮食记录 - 平铺数组
           if (dayData.foods && dayData.foods.length > 0) {
             dayData.foods.forEach(food => {
-              const content = `"${(food.content || '').replace(/"/g, '""')}"`;
-              csvData.push([dateKey, '饮食', content, food.timestamp || '', `数量: ${food.quantity || 1} ${food.unit || ''}`].join(','));
+              const content = `"${(food.content || food.name || '').replace(/"/g, '""')}"`;
+              const details = `数量: ${food.quantity || 1} ${food.unit || ''}`;
+              csvData.push([dateKey, '饮食', content, food.timestamp || '', details].join(','));
+              totalRecords++;
             });
           }
           
-          // 运动记录
+          // 运动记录 - 平铺数组
           if (dayData.exercises && dayData.exercises.length > 0) {
             dayData.exercises.forEach(exercise => {
-              const content = `"${(exercise.content || '').replace(/"/g, '""')}"`;
+              const content = `"${(exercise.content || exercise.name || '').replace(/"/g, '""')}"`;
               csvData.push([dateKey, '运动', content, exercise.timestamp || '', ''].join(','));
+              totalRecords++;
             });
           }
           
-          // 睡眠记录
+          // 睡眠记录 - 平铺数组
           if (dayData.sleeps && dayData.sleeps.length > 0) {
             dayData.sleeps.forEach(sleep => {
               const content = `"${(sleep.content || '').replace(/"/g, '""')}"`;
-              csvData.push([dateKey, '睡眠', content, sleep.timestamp || '', `时长: ${sleep.duration || 0}小时`].join(','));
+              const details = `时长: ${sleep.duration || 0}小时`;
+              csvData.push([dateKey, '睡眠', content, sleep.timestamp || '', details].join(','));
+              totalRecords++;
             });
           }
           
-          // 皮肤记录
+          // 皮肤记录 - 平铺数组
           if (dayData.skins && dayData.skins.length > 0) {
             dayData.skins.forEach(skin => {
-              const content = `"${(skin.content || '').replace(/"/g, '""')}"`;
+              const content = `"${(skin.content || skin.description || '').replace(/"/g, '""')}"`;
               const tags = (skin.tags || []).join(' ');
-              csvData.push([dateKey, '皮肤', content, skin.timestamp || '', `标签: ${tags}`].join(','));
+              const details = tags ? `标签: ${tags}` : '';
+              csvData.push([dateKey, '皮肤', content, skin.timestamp || '', details].join(','));
+              totalRecords++;
             });
           }
           
-          // 日记记录
+          // 日记记录 - 平铺数组
           if (dayData.diaries && dayData.diaries.length > 0) {
             dayData.diaries.forEach(diary => {
-              const content = `"${(diary.content || '').replace(/"/g, '""')}"`;
+              const content = `"${(diary.content || diary.text || '').replace(/"/g, '""')}"`;
               const tags = (diary.tags || []).join(' ');
-              csvData.push([dateKey, '日记', content, diary.timestamp || '', `标签: ${tags}`].join(','));
+              const details = tags ? `标签: ${tags}` : '';
+              csvData.push([dateKey, '日记', content, diary.timestamp || '', details].join(','));
+              totalRecords++;
             });
           }
         });
+        
+        console.log(`[exportTableData] Generated ${totalRecords} total records from ${Object.keys(allData).length} dates`);
         
         // 创建 CSV 文件
         const csvString = csvData.join('\n');
@@ -2022,15 +2096,15 @@
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'personal_evolution_lab_data.csv';
+        link.download = `personal_evolution_lab_table_${new Date().toISOString().split('T')[0]}.csv`;
         link.click();
         URL.revokeObjectURL(url);
         
-        console.log('[exportTableData] CSV exported successfully');
-        alert('表格导出成功！');
+        console.log('[exportTableData] Table export completed successfully');
+        alert(`表格导出成功！共导出 ${Object.keys(allData).length} 天，${totalRecords} 条记录`);
       } catch (error) {
         console.error('[exportTableData] Error:', error);
-        alert('导出表格失败: ' + error.message);
+        alert('导出失败：' + error.message);
       }
     }
 
